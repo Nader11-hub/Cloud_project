@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.git
+.gitignore
+venv
+.env
+data/
+*.db
+*.pdf
+STAGE1_GUIDE.md
+PROJECT_PROPOSAL.md
+deploy_vm.sh

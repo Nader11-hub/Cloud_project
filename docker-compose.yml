@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  # Component 1: Login Monitor Web Application
+  login-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: login-monitor:latest
+    container_name: login-monitor-app
+    restart: unless-stopped
+    ports:
+      - "5050:5000"   # Maps host port 5050 to container port 5000 (distinct from VM port 8080)
+    environment:
+      - DATA_DIR=/app/data
+    volumes:
+      - login_monitor_data:/app/data
+    networks:
+      - cloud_net
+
+networks:
+  cloud_net:
+    name: cloud_project_network
+    driver: bridge
+
+volumes:
+  login_monitor_data:
+    name: cloud_project_db_volume
