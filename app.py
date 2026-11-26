@@ -150,6 +150,11 @@ HTML_TEMPLATE = """
             <div class="chip"><span class="pulse-dot"></span>LIVE</div>
             <div class="chip"><i class="bi bi-hdd-stack" style="color:var(--accent-cyan)"></i>&nbsp;{{ hostname }}</div>
             <div class="chip"><i class="bi bi-arrow-clockwise"></i>&nbsp;30s refresh</div>
+            {% if is_admin %}
+            <div class="chip" style="border-color:rgba(0,255,136,0.3);color:var(--accent-green);"><i class="bi bi-shield-fill-check"></i>&nbsp;ADMIN</div>
+            {% elif logged_in %}
+            <div class="chip" style="border-color:rgba(255,204,0,0.3);color:var(--accent-yellow);"><i class="bi bi-eye"></i>&nbsp;SOC ANALYST</div>
+            {% endif %}
         </div>
     </header>
 
@@ -198,10 +203,14 @@ HTML_TEMPLATE = """
                 {% for ip, count in flagged_ips %}
                     <div class="threat-active d-flex justify-content-between align-items-center">
                         <div><div class="threat-ip">{{ ip }}</div><div class="threat-count">{{ count }} failed attempts</div></div>
+                        {% if is_admin %}
                         <form action="/unblock" method="POST">
                             <input type="hidden" name="ip" value="{{ ip }}">
                             <button type="submit" class="btn-unblock"><i class="bi bi-shield-slash"></i>&nbsp;Unblock</button>
                         </form>
+                        {% else %}
+                        <span style="font-size:.68rem;color:#3a5070;font-family:'JetBrains Mono',monospace;">READ-ONLY</span>
+                        {% endif %}
                     </div>
                 {% endfor %}
                 </div>
@@ -211,9 +220,15 @@ HTML_TEMPLATE = """
                     <span style="font-size:.78rem;color:#2a5040;">No active threats detected</span>
                 </div>
                 {% endif %}
+                {% if is_admin %}
                 <form action="/clear-logs" method="POST" onsubmit="return confirm('Clear ALL audit logs?');" class="mt-2">
                     <button type="submit" class="btn-clear"><i class="bi bi-trash3"></i>&nbsp;Clear All Logs</button>
                 </form>
+                {% else %}
+                <div class="mt-2" style="text-align:center;font-size:.7rem;color:#2a4060;font-family:'JetBrains Mono',monospace;padding:.5rem;">
+                    <i class="bi bi-lock"></i>&nbsp;Clear Logs — Admin Only
+                </div>
+                {% endif %}
             </div>
         </div>
 
@@ -288,6 +303,8 @@ def index():
     hostname = socket.gethostname()
     message = request.args.get('message')
     alert_type = request.args.get('alert_type', 'info')
+    is_admin = request.args.get('is_admin', 'false') == 'true'
+    logged_in = request.args.get('logged_in', 'false') == 'true'
 
     conn = get_db()
     cursor = conn.cursor()
@@ -322,7 +339,9 @@ def index():
         hostname=hostname,
         message=message,
         alert_type=alert_type,
-        stats=stats
+        stats=stats,
+        is_admin=is_admin,
+        logged_in=logged_in
     )
 
 @app.route('/login', methods=['POST'])
@@ -333,9 +352,14 @@ def login():
     user_agent = request.headers.get('User-Agent', '')
 
     if username == 'admin' and password == 'cloud':
-        status, message, alert_type = 'SUCCESS', 'Login successful! Welcome back.', 'success'
+        status, message, alert_type = 'SUCCESS', 'Login successful! Welcome, Admin.', 'success'
+        is_admin, logged_in = True, True
+    elif username == 'analyst' and password == 'view123':
+        status, message, alert_type = 'SUCCESS', 'Logged in as SOC Analyst (Read-Only access).', 'success'
+        is_admin, logged_in = False, True
     else:
         status, message, alert_type = 'FAILED', 'Invalid credentials. Attempt flagged.', 'danger'
+        is_admin, logged_in = False, False
 
     conn = get_db()
     conn.execute(
@@ -345,7 +369,7 @@ def login():
     conn.commit()
     conn.close()
 
-    return redirect(url_for('index', message=message, alert_type=alert_type))
+    return redirect(url_for('index', message=message, alert_type=alert_type, is_admin=str(is_admin).lower(), logged_in=str(logged_in).lower()))
 
 @app.route('/unblock', methods=['POST'])
 def unblock():
