@@ -1,8 +1,9 @@
 import os
 import sqlite3
-from flask import Flask, request, jsonify, render_template_string, redirect, url_for
+from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'cloud-security-soc-secret-key-2026')
 
 DATA_DIR = os.environ.get('DATA_DIR', '/app/data' if os.path.exists('/app') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -152,8 +153,10 @@ HTML_TEMPLATE = """
             <div class="chip"><i class="bi bi-arrow-clockwise"></i>&nbsp;30s refresh</div>
             {% if is_admin %}
             <div class="chip" style="border-color:rgba(0,255,136,0.3);color:var(--accent-green);"><i class="bi bi-shield-fill-check"></i>&nbsp;ADMIN</div>
+            <a href="/logout" class="chip text-decoration-none" style="color:var(--accent-red);border-color:rgba(255,68,102,0.2);"><i class="bi bi-box-arrow-right"></i>&nbsp;Logout</a>
             {% elif logged_in %}
             <div class="chip" style="border-color:rgba(255,204,0,0.3);color:var(--accent-yellow);"><i class="bi bi-eye"></i>&nbsp;SOC ANALYST</div>
+            <a href="/logout" class="chip text-decoration-none" style="color:var(--accent-red);border-color:rgba(255,68,102,0.2);"><i class="bi bi-box-arrow-right"></i>&nbsp;Logout</a>
             {% endif %}
         </div>
     </header>
@@ -170,7 +173,7 @@ HTML_TEMPLATE = """
     <div class="row g-4">
         <div class="col-md-4 d-flex flex-column gap-4">
 
-            <!-- Login -->
+            <!-- Authentication Terminal -->
             <div class="glass-card p-4">
                 <div class="section-title"><i class="bi bi-terminal"></i>&nbsp;Authentication Terminal</div>
                 {% if message %}
@@ -187,6 +190,24 @@ HTML_TEMPLATE = """
                     </div>
                     <button type="submit" class="btn-signin w-100"><i class="bi bi-shield-lock"></i>&nbsp;Authenticate</button>
                 </form>
+            </div>
+
+            <!-- Standalone Unblock IP Card -->
+            <div class="glass-card p-4">
+                <div class="section-title"><i class="bi bi-shield-slash" style="color:var(--accent-yellow)"></i>&nbsp;Manual IP Unblock</div>
+                {% if is_admin %}
+                <form action="/unblock" method="POST" class="d-flex gap-2">
+                    <input type="text" name="ip" class="form-control form-control-dark" placeholder="Enter IP (e.g. 192.168.1.10)" required>
+                    <button type="submit" class="btn" style="background:rgba(255,204,0,0.15);border:1px solid rgba(255,204,0,0.4);color:var(--accent-yellow);font-weight:600;font-size:.82rem;white-space:nowrap;border-radius:10px;">
+                        <i class="bi bi-unlock-fill"></i>&nbsp;Unblock IP
+                    </button>
+                </form>
+                {% else %}
+                <div class="d-flex align-items-center justify-content-between p-2" style="background:rgba(255,255,255,0.02);border:1px dashed rgba(255,255,255,0.08);border-radius:8px;">
+                    <span style="font-size:.75rem;color:var(--text-dim);"><i class="bi bi-lock"></i> Admin privileges required</span>
+                    <span class="badge" style="background:rgba(255,204,0,0.1);color:var(--accent-yellow);font-size:.65rem;">RESTRICTED</span>
+                </div>
+                {% endif %}
             </div>
 
             <!-- Threats -->
@@ -303,8 +324,14 @@ def index():
     hostname = socket.gethostname()
     message = request.args.get('message')
     alert_type = request.args.get('alert_type', 'info')
-    is_admin = request.args.get('is_admin', 'false') == 'true'
-    logged_in = request.args.get('logged_in', 'false') == 'true'
+    
+    role = session.get('role')
+    is_admin = (role == 'admin') or (request.args.get('is_admin', 'false') == 'true')
+    logged_in = (role in ['admin', 'analyst']) or (request.args.get('logged_in', 'false') == 'true')
+    if is_admin:
+        session['role'] = 'admin'
+    elif logged_in and not role:
+        session['role'] = 'analyst'
 
     conn = get_db()
     cursor = conn.cursor()
@@ -353,9 +380,11 @@ def login():
 
     if username == 'admin' and password == 'cloud':
         status, message, alert_type = 'SUCCESS', 'Login successful! Welcome, Admin.', 'success'
+        session['role'] = 'admin'
         is_admin, logged_in = True, True
     elif username == 'analyst' and password == 'view123':
         status, message, alert_type = 'SUCCESS', 'Logged in as SOC Analyst (Read-Only access).', 'success'
+        session['role'] = 'analyst'
         is_admin, logged_in = False, True
     else:
         status, message, alert_type = 'FAILED', 'Invalid credentials. Attempt flagged.', 'danger'
@@ -369,17 +398,25 @@ def login():
     conn.commit()
     conn.close()
 
-    return redirect(url_for('index', message=message, alert_type=alert_type, is_admin=str(is_admin).lower(), logged_in=str(logged_in).lower()))
+    return redirect(url_for('index', message=message, alert_type=alert_type))
+
+@app.route('/logout')
+def logout():
+    session.pop('role', None)
+    return redirect(url_for('index', message='Logged out successfully.', alert_type='info'))
 
 @app.route('/unblock', methods=['POST'])
 def unblock():
-    target_ip = request.form.get('ip')
+    target_ip = request.form.get('ip', '').strip()
     if target_ip:
         conn = get_db()
         conn.execute("DELETE FROM login_logs WHERE ip_address = ? AND status = 'FAILED'", (target_ip,))
         conn.commit()
         conn.close()
-    return redirect(url_for('index', message=f'IP {target_ip} unblocked and cleared.', alert_type='info'))
+        msg = f'IP {target_ip} unblocked and cleared.'
+    else:
+        msg = 'No IP specified.'
+    return redirect(url_for('index', message=msg, alert_type='info'))
 
 @app.route('/clear-logs', methods=['POST'])
 def clear_logs():
@@ -387,6 +424,7 @@ def clear_logs():
     conn.execute('DELETE FROM login_logs')
     conn.commit()
     conn.close()
+    return redirect(url_for('index', message='All audit logs cleared.', alert_type='info'))
     return redirect(url_for('index', message='All audit logs cleared.', alert_type='info'))
 
 @app.route('/api/logs')
